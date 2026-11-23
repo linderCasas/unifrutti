@@ -529,6 +529,12 @@ def load_abastecimiento_report(requested_year: int | None = None, requested_mont
         "water_quality": water_quality,
     }
 
+
+def warm_report_caches() -> None:
+    """Import the report workbooks once before Gunicorn starts serving requests."""
+    load_abastecimiento_report(date.today().year)
+
+
 @app.get("/")
 def home():
     return render_template("index.html", areas=AREAS, year=date.today().year)
