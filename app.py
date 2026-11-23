@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import re
 import unicodedata
+from zipfile import ZipFile
+from xml.etree import ElementTree as ET
 from collections import defaultdict
 from copy import deepcopy
 from functools import lru_cache
@@ -11,6 +13,7 @@ from typing import Any
 
 from flask import Flask, abort, jsonify, redirect, render_template, request, url_for
 from openpyxl import load_workbook
+from openpyxl.utils.cell import range_boundaries
 
 app = Flask(__name__)
 BASE_DIR = Path(__file__).resolve().parent
@@ -61,6 +64,23 @@ def _open_sheet(path: Path, sheet_name: str):
         workbook.close()
         raise ReportSourceError(f"No se encontró la hoja {sheet_name} en {path.name}.")
     return workbook, workbook[sheet_name]
+
+
+def _excel_table_last_row(path: Path, table_name: str) -> int:
+    try:
+        with ZipFile(path) as archive:
+            for member in archive.namelist():
+                if not member.startswith("xl/tables/table") or not member.endswith(".xml"):
+                    continue
+                table = ET.fromstring(archive.read(member))
+                if table.attrib.get("name") == table_name:
+                    reference = table.attrib.get("ref")
+                    if not reference:
+                        break
+                    return range_boundaries(reference)[3]
+    except Exception as error:
+        raise ReportSourceError(f"No se pudo leer el rango de la tabla {table_name} en {path.name}.") from error
+    raise ReportSourceError(f"No se encontro la tabla {table_name} en {path.name}.")
 
 
 def _load_reservoir_matrix(requested_year: int | None = None) -> dict[str, Any]:
@@ -216,6 +236,7 @@ def load_license_usage_matrix(requested_year: int | None = None) -> dict[str, An
     return deepcopy(_cached_license_usage_matrix(requested_year, stat.st_mtime_ns, stat.st_size))
 
 def _load_reservoir_levels_data() -> dict[str, Any]:
+    last_row = _excel_table_last_row(RESERVOIR_LEVELS_FILE, "Tabla4")
     workbook, sheet = _open_sheet(RESERVOIR_LEVELS_FILE, "DATA")
     try:
         header_row = next(sheet.iter_rows(min_row=1, max_row=1, max_col=11, values_only=True), ())
@@ -231,7 +252,7 @@ def _load_reservoir_levels_data() -> dict[str, Any]:
             raise ReportSourceError("Faltan columnas requeridas en DATA: " + ", ".join(missing))
         grouped: dict[tuple[int, int, date, str, str], list[Any]] = {}
         funds: set[str] = set()
-        for row in sheet.iter_rows(min_row=2, max_col=11, values_only=True):
+        for row in sheet.iter_rows(min_row=2, max_row=last_row, max_col=11, values_only=True):
             raw_date = row[columns["fecha"]]
             if isinstance(raw_date, datetime):
                 record_date = raw_date.date()
@@ -333,6 +354,7 @@ def load_reservoir_levels_matrix(
 
 
 def _load_water_quality_data() -> dict[str, Any]:
+    last_row = _excel_table_last_row(WATER_QUALITY_FILE, "DATA1")
     workbook, sheet = _open_sheet(WATER_QUALITY_FILE, "DATA")
     try:
         header_row = next(sheet.iter_rows(min_row=1, max_row=1, max_col=39, values_only=True), ())
@@ -353,7 +375,7 @@ def _load_water_quality_data() -> dict[str, Any]:
             "leaked_ce": columns["ce df"],
         }
         grouped: dict[tuple[int, int, date, int], dict[str, list[float]]] = {}
-        for row in sheet.iter_rows(min_row=2, max_col=39, values_only=True):
+        for row in sheet.iter_rows(min_row=2, max_row=last_row, max_col=39, values_only=True):
             raw_date = row[columns["fecha"]]
             if isinstance(raw_date, datetime):
                 record_date = raw_date.date()
